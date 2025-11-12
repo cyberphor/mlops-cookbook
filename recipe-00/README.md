@@ -1,6 +1,9 @@
 ## Recipe 00
 The recipe demonstrates how to use Ray to evaluate AI agents at scale. 
 
+### References
+* [Ray: What’s Ray Core?](https://docs.ray.io/en/latest/ray-core/walkthrough.html)
+
 ## Part 00
 This part of the recipe outlines the setup for this project. 
 
