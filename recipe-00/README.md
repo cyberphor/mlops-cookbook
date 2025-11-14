@@ -19,22 +19,22 @@ sudo apt-get update
 sudo apt-get install -y kubectl
 ```
 
-**Step 2.** Text goes here. 
+**Step 2.** Install `kind`. 
 ```bash
 go install sigs.k8s.io/kind@v0.30.0
 ```
 
-**Step 3.** Text goes here. 
+**Step 3.** Open your shell's runtime configuration file. 
 ```bash
 vim .bashrc
 ```
 
-**Step 4.** Text goes here. 
+**Step 4.** Update your execution path so it includes your local Go `bin` directory (where `kind` was installed). 
 ```bash
 export PATH="$(go env GOPATH)/bin:$PATH"
 ```
 
-**Step 5.** Text goes here. A kubeconfig will be automatically merged into `~/.kube/config`.
+**Step 5.** Run the provided script. A kubeconfig will be automatically merged into `~/.kube/config`.
 ```bash
 bash build-cluster-and-regisry.sh
 ```

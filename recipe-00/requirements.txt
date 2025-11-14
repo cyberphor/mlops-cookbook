@@ -1,1 +1,5 @@
+langchain
+langchain-openai
+python-dotenv
+python-whois
 ray
