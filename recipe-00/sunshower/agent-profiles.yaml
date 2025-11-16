@@ -1,0 +1,25 @@
+---
+- name: Alpha
+  model:
+    provider: openai
+    name: gpt-4o
+    system_prompt: You are a helpful assistant.
+  harness:
+    tools:
+      - whois
+- name: Bravo
+  model:
+    provider: openai
+    name: gpt-4.1
+    system_prompt: You are a helpful assistant.
+  harness:
+    tools:
+      - whois
+- name: Charlie
+  model:
+    provider: openai
+    name: gpt-5
+    system_prompt: You are a helpful assistant.
+  harness:
+    tools:
+      - whois
