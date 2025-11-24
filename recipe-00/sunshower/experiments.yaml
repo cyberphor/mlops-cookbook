@@ -1,0 +1,29 @@
+---
+- name: Team 1
+  agents:
+  - name: Alpha
+    model:
+      provider: openai
+      name: gpt-4.1
+      system_prompt: You are a helpful assistant.
+    harness:
+      tools:
+        - whois
+- name: Team 2
+  agents:
+  - name: Alpha
+    model:
+      provider: openai
+      name: gpt-4o
+      system_prompt: You are a helpful assistant.
+    harness:
+      tools:
+        - whois
+  - name: Bravo
+    model:
+      provider: openai
+      name: gpt-4.1
+      system_prompt: You are a Cyber Threat Intelligence analyst assigned to support a Cyber Security Service Provider (CSSP) within the Department of Defense.
+    harness:
+      tools:
+        - whois

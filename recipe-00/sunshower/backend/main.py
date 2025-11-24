@@ -1,120 +1,104 @@
 # Stand library imports.
 from argparse import ArgumentParser
 from dotenv import load_dotenv
+from logging import ERROR
 from time import perf_counter
-from typing import Dict, List
+from typing import Dict
+
+# https://discuss.ray.io/t/how-to-set-ray-dedup-logs-0/10465/11
+from os import environ
+environ["RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO"] = "0" # Do not override "accelerator visible" devices.
 
 # Third party imports.
 from langchain.agents import create_agent
-from langchain.tools import tool
+from langchain_core.load import dumps
+from langchain_core.runnables import Runnable
+from langgraph.graph import StateGraph, MessagesState, START, END
 from ray import get, init, remote, shutdown
-from whois import whois
-from yaml import safe_load
 
-whois = tool("whois")(whois)
+# Local imports.
+from backend.experiments import get_experiment_plans
+from backend.profiles import get_team_profile, TeamProfile
 
-def get_agent_profiles(yaml_file_name: str) -> List:
-    with open(yaml_file_name, mode="r", encoding="UTF-8") as yaml_file:
-        return safe_load(yaml_file)
 
-def check_agent_profile(agent_profile: Dict):
-    # Check agent "name" key.
-    if "name" not in agent_profile:
-        raise ValueError('"name" key not found in agent profile')
-    
-    # Check agent "name" value.
-    if agent_profile.get("name") is None:
-        raise ValueError('"name" key in agent profile is null')
-    
-    # Check "model" key.
-    if "model" not in agent_profile:
-        raise ValueError('"model" key not found in agent profile')
-    
-    # Check "model" provider value.
-    if agent_profile.get("model").get("provider") is None:
-        raise ValueError('"provider" key in "model" key is null')
-    
-    # Check "model" name value.
-    if agent_profile.get("model").get("name") is None:
-        raise ValueError('"name" key in "model" key is null')
-    
-    # Check model "system_prompt" value.
-    if agent_profile.get("model").get("system_prompt") is None:
-        raise ValueError('"system_prompt" key in "model" key is null')
-
-    # Check "harness" key.
-    if "harness" not in agent_profile:
-        raise ValueError('"harness" key not found in agent profile')
-
-    # Check harness "tools" value.
-    if len(agent_profile.get("harness").get("tools")) < 1:
-        raise ValueError('"tools" key in "harness" key is null')
-
-def load_tools(agent_profile: Dict):
-    tools = []
-    for t in agent_profile["harness"]["tools"]:
-        match t:
-            case "whois":
-                tools.append(whois)
-            case _:
-                raise RuntimeError(f"unknown tool: {t}")
-    agent_profile["harness"]["tools"] = tools
-
-def check_agent_profiles(agent_profiles: List[Dict]):
-    for agent_profile in agent_profiles:
-        check_agent_profile(agent_profile) # what does this check, profile quality?
-        load_tools(agent_profile)
+def build_team(team_profile):
+    graph = StateGraph(MessagesState)
+    agents = []
+    for agent_profile in team_profile.agent_profiles:
+        agents.append(agent_profile.name)
+        agent = create_agent(
+            model=agent_profile.model.name,
+            tools=agent_profile.harness.tools,
+            system_prompt=agent_profile.model.system_prompt,
+        )
+        graph.add_node(agent_profile.name, agent)
+    graph.add_edge(START, agents[0])
+    for previous, next in zip(agents, agents[1:]):
+        graph.add_edge(previous, next)
+    graph.add_edge(agents[-1], END)
+    return graph.compile()
 
 @remote
-def run_agent(model_name: str, system_prompt: str, tools: List[tool] | None, task: str):
-    return create_agent(
-        model=model_name,
-        tools=tools,
-        system_prompt=system_prompt,
-    ).invoke({
+def evaluate(team_profile: TeamProfile, task: str):
+    start = perf_counter()
+    team = build_team(team_profile)
+    output = team.invoke({
         "messages": [
             {"role": "user", "content": task}
         ]
     })
+    end = perf_counter()
+    time_taken = f"{end - start:.6f}"
+    return { 
+        "name": team_profile.name,
+        "messages": output["messages"],
+        "time_taken": time_taken
+    }
 
-def main(file_name: str, task: str):
+def start(file_name: str, task: str):
     """
-    The main entrypoint to coach.
+    The main entrypoint to sunshower.
     """
     # Load environment variables (e.g., API keys) from a file.
     load_dotenv()
 
     # Load agent configurations from a file.
-    agent_profiles = get_agent_profiles(yaml_file_name=file_name)
-    check_agent_profiles(agent_profiles)
+    experiment_plans = get_experiment_plans(file_name)
 
-    # Init a Ray cluster.
-    init()
+    # Init a Ray cluster. 
+    # - Do not include a dashboard (metrics will therefore not be exported).
+    # - Do not send agent logs back to the Ray driver (i.e., the process running Ray).
+    init(
+        include_dashboard=False,
+        logging_level=ERROR,
+        log_to_driver=False
+    )
 
-    # Run each agent in parallel on the Ray cluster. 
+    # Run each experiment in parallel on the Ray cluster. 
     object_references = []
-    for agent_profile in agent_profiles:
-        object_reference = run_agent.remote(
-            agent_profile["model"]["name"],
-            agent_profile["model"]["system_prompt"],
-            agent_profile["harness"]["tools"],
-            task)
+    for experiment_plan in experiment_plans:
+        team_profile = get_team_profile(experiment_plan)
+        object_reference = evaluate.remote(team_profile, task)
         object_references.append(object_reference)
 
-    # Get the output of each agent.
-    objects = get(object_references)
-    for object in objects:
-        print(object)
+    # Get the output of each experiment.
+    with open(file="results.ndjson", mode="w", encoding="UTF-8") as output_file:
+        objects = get(object_references)
+        for object in objects:
+            output_file.write(f"{dumps(object)}\n")
 
     # Shutdown the Ray cluster.
     shutdown()
 
 if __name__ == "__main__":
-    parser = ArgumentParser()
-    parser.add_argument("--file", type=str, default="agent-profiles.yaml")
-    parser.add_argument("--task", type=str, required=True)
-    args = parser.parse_args()
-    start = perf_counter()
-    main(file_name=args.file, task=args.task)
-    end = perf_counter()
-    print(f"Time: {end - start:.6f} seconds")
+    try:
+        # Define input parameters.
+        parser = ArgumentParser()
+        parser.add_argument("-f", "--file", type=str, required=True)
+        parser.add_argument("-t", "--task", type=str, required=True)
+        args = parser.parse_args()
+
+        # Run the main function.
+        start(file_name=args.file, task=args.task)
+    except Exception as error:
+        print(error)
